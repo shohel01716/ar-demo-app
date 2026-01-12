@@ -49,6 +49,10 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   bool _cameraPermissionGranted = false;
   int score = 0;
 
+  // Physics
+  final double gravity = -9.8;
+  final double deltaT = 0.02; // 20ms physics step
+
   @override
   void initState() {
     super.initState();
@@ -102,24 +106,25 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                   onArCoreViewCreated: _onArCoreViewCreated,
                   enableTapRecognizer: true,
                 ),
+                GestureDetector(
+                  onPanEnd: (details) {
+                    if (!isThrowing && ballNode != null) {
+                      _handleSwipe(details.velocity);
+                    }
+                  },
+                  child: Container(
+                    color: Colors.transparent,
+                    width: double.infinity,
+                    height: double.infinity,
+                  ),
+                ),
                 Positioned(
                   bottom: 40,
                   left: 0,
                   right: 0,
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      ElevatedButton(
-                        onPressed: isThrowing ? null : _throwBall,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 32, vertical: 16),
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
-                        ),
-                        child:
-                            const Text('Throw', style: TextStyle(fontSize: 18)),
-                      ),
                       ElevatedButton(
                         onPressed: _resetBall,
                         style: ElevatedButton.styleFrom(
@@ -128,10 +133,25 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                           backgroundColor: Colors.orange,
                           foregroundColor: Colors.white,
                         ),
-                        child:
-                            const Text('Reset', style: TextStyle(fontSize: 18)),
+                        child: const Text('Reset Ball',
+                            style: TextStyle(fontSize: 18)),
                       ),
                     ],
+                  ),
+                ),
+                const Positioned(
+                  bottom: 150,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Text(
+                      "Swipe Up to Throw!",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        shadows: [Shadow(blurRadius: 10, color: Colors.black)],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -163,14 +183,13 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     );
 
     // 2. Hoop/Rim (represented as an Orange Box for simplicity)
-    // In a real app, use a proper 3D model
     final hoopMaterial = ArCoreMaterial(
       color: Colors.deepOrange,
       metallic: 1.0,
     );
     final hoopShape = ArCoreCube(
       materials: [hoopMaterial],
-      size: vector.Vector3(0.45, 0.05, 0.45), // A flat square rim
+      size: vector.Vector3(0.45, 0.05, 0.45),
     );
     hoopNode = ArCoreNode(
       shape: hoopShape,
@@ -199,53 +218,78 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     arCoreController?.addArCoreNode(ballNode!);
   }
 
-  void _throwBall() {
-    if (ballNode == null || isThrowing) return;
+  void _handleSwipe(Velocity velocity) {
     setState(() => isThrowing = true);
 
-    // Initial position
-    final start = currentBallPosition.clone();
+    // Map 2D Swipe Velocity to 3D Force
+    // Y (Screen Up) -> Z (World Forward) & Y (World Up)
+    // X (Screen Right) -> X (World Right)
 
-    // Target position (The hoop)
-    // We add some "skill" variance based on nothing for now, but in future could use sensors
-    // Perfect shot logic:
-    final end = hoopPosition.clone();
+    double sensitivity = 0.002;
+    double forwardForce = -velocity.pixelsPerSecond.dy *
+        sensitivity; // Swipe Up is negative Y pixels
+    double upForce = forwardForce * 0.8; // Add some arc
+    double sideForce = velocity.pixelsPerSecond.dx * sensitivity * 0.5;
 
-    // Animation loop (simulating projectile motion)
-    int steps = 25;
-    double durationSecs = 1.0;
-    double timePerStep = durationSecs / steps;
-    int currentStep = 0;
+    // Minimum throw strength
+    if (forwardForce < 1.0) forwardForce = 1.0;
 
+    // Initial Velocity Vector
+    // Note: Z is negative into the screen
+    vector.Vector3 ballVelocity =
+        vector.Vector3(sideForce, upForce, -forwardForce);
+
+    _runPhysicsLoop(ballVelocity);
+  }
+
+  void _runPhysicsLoop(vector.Vector3 velocity) {
     Future.doWhile(() async {
-      await Future.delayed(
-          Duration(milliseconds: (timePerStep * 1000).round()));
+      await Future.delayed(const Duration(milliseconds: 20));
 
-      if (currentStep > steps || ballNode == null) {
-        // Check scoring at the end
-        _checkScore(currentBallPosition);
+      if (!isThrowing || ballNode == null) return false;
+
+      // 1. Gravity
+      velocity.y += gravity * deltaT;
+
+      // 2. Update Position
+      currentBallPosition += velocity * deltaT;
+
+      // 3. Collision Detection (Backboard)
+      if (backboardNode != null) {
+        // Simple AABB check for backboard plane
+        // Backboard roughly at Z = -3.25 (adjusted for visual thickness)
+        // Check Z plane crossing
+        if (currentBallPosition.z < -3.0 &&
+            currentBallPosition.z > -3.3 &&
+            currentBallPosition.y > hoopPosition.y &&
+            currentBallPosition.y < hoopPosition.y + 1.0 &&
+            currentBallPosition.x > -0.6 &&
+            currentBallPosition.x < 0.6) {
+          // Bounce!
+          velocity.z = -velocity.z * 0.5; // Invert Z with damping
+          velocity.y *= 0.8; // Lose energy
+          currentBallPosition.z = -2.95; // Push out to prevent stuck
+        }
+      }
+
+      // 4. Floor/Out of Bounds Collision
+      if (currentBallPosition.y < -2.0 || currentBallPosition.z < -10.0) {
         setState(() => isThrowing = false);
         return false;
       }
 
-      double t = currentStep / steps; // 0.0 to 1.0
+      // 5. Hoop Scoring
+      double distToHoop = currentBallPosition.distanceTo(hoopPosition);
+      if (distToHoop < 0.25) {
+        // 25cm tolerance
+        _checkScore();
+        setState(() => isThrowing = false);
+        return false;
+      }
 
-      // Linear interpolation for X and Z (straight text)
-      double x = start.x + (end.x - start.x) * t;
-      double z = start.z + (end.z - start.z) * t;
+      // Update Visuals
+      _updateBallPosition(currentBallPosition);
 
-      // Parabolic arc for Y: y = startY + (distY * t) + (4 * height * t * (1-t))
-      // This adds an "arc" height of 0.8 meters
-      double arcHeight = 0.8;
-      double y =
-          start.y + (end.y - start.y) * t + (4 * arcHeight * t * (1 - t));
-
-      vector.Vector3 newPos = vector.Vector3(x, y, z);
-
-      _updateBallPosition(newPos);
-      currentBallPosition = newPos;
-
-      currentStep++;
       return true;
     });
   }
@@ -264,18 +308,17 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     arCoreController?.addArCoreNode(ballNode!);
   }
 
-  void _checkScore(vector.Vector3 finalPos) {
-    // Simple distance check: if ball is close enough to hoop position
-    double distance = finalPos.distanceTo(hoopPosition);
-    if (distance < 0.3) {
-      // 30cm tolerance
-      setState(() {
-        score++;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Basket! +1 Point')),
-      );
-    }
+  void _checkScore() {
+    setState(() {
+      score++;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Basket! +1 Point'),
+        duration: Duration(seconds: 1),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   void _resetBall() {
