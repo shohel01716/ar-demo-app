@@ -1,0 +1,55 @@
+
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = '../build'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+
+    // Force strict Kotlin version for subprojects (fixes arcore_flutter_plugin relying on old Kotlin)
+    project.buildscript.configurations.all {
+        resolutionStrategy {
+            force "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0"
+        }
+    }
+
+    def configureNamespace = { proj ->
+        if (proj.extensions.findByName("android") != null) {
+            def android = proj.extensions.findByName("android")
+            if (android.namespace == null) {
+                def manifestFile = proj.file("src/main/AndroidManifest.xml")
+                if (manifestFile.exists()) {
+                    try {
+                        def parser = new groovy.xml.XmlSlurper()
+                        def manifest = parser.parse(manifestFile)
+                        def packageName = manifest.@package.text()
+                        if (packageName) {
+                            android.namespace = packageName
+                            println "Auto-assigned namespace '${packageName}' to project '${proj.name}'"
+                        }
+                    } catch (e) {
+                        println "Could not parse manifest for ${proj.name}: ${e}"
+                    }
+                }
+            }
+        }
+    }
+
+    if (project.state.executed) {
+        configureNamespace(project)
+    } else {
+        project.afterEvaluate { configureNamespace(it) }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
