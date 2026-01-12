@@ -32,23 +32,27 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   // ARCore controller to manage the AR session
   ArCoreController? arCoreController;
 
-  // Reference to the ball node so we can move it
+  // Nodes
   ArCoreNode? ballNode;
+  ArCoreNode? backboardNode;
+  ArCoreNode? hoopNode;
 
-  // Initial position of the ball (1 meter in front of camera)
-  final vector.Vector3 initialPosition = vector.Vector3(0.0, 0.0, -1.0);
+  // Game/Physics constants
+  final vector.Vector3 initialBallPosition = vector.Vector3(0.0, -0.5, -1.0);
+  final vector.Vector3 hoopPosition = vector.Vector3(0.0, 0.5, -3.0);
 
   // Current position of the ball
-  vector.Vector3 currentPosition = vector.Vector3(0.0, 0.0, -1.0);
+  late vector.Vector3 currentBallPosition;
 
-  // Flag to track if ball is being thrown
+  // Game State
   bool isThrowing = false;
-
   bool _cameraPermissionGranted = false;
+  int score = 0;
 
   @override
   void initState() {
     super.initState();
+    currentBallPosition = vector.Vector3.copy(initialBallPosition);
     _checkPermission();
   }
 
@@ -62,7 +66,19 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AR Demo App'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('AR Basketball'),
+        centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text(
+              'Score: $score',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
       body: !_cameraPermissionGranted
           ? Center(
               child: Column(
@@ -82,13 +98,10 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
             )
           : Stack(
               children: [
-                // ARCore camera view - this displays the device camera with AR overlay
                 ArCoreView(
                   onArCoreViewCreated: _onArCoreViewCreated,
                   enableTapRecognizer: true,
                 ),
-
-                // Floating UI buttons overlaid on top of AR view
                 Positioned(
                   bottom: 40,
                   left: 0,
@@ -96,30 +109,22 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      // Throw button - moves ball forward
                       ElevatedButton(
                         onPressed: isThrowing ? null : _throwBall,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 32,
-                            vertical: 16,
-                          ),
+                              horizontal: 32, vertical: 16),
                           backgroundColor: Colors.blue,
                           foregroundColor: Colors.white,
-                          disabledBackgroundColor: Colors.grey,
                         ),
                         child:
                             const Text('Throw', style: TextStyle(fontSize: 18)),
                       ),
-
-                      // Reset button - returns ball to initial position
                       ElevatedButton(
                         onPressed: _resetBall,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 32,
-                            vertical: 16,
-                          ),
+                              horizontal: 32, vertical: 16),
                           backgroundColor: Colors.orange,
                           foregroundColor: Colors.white,
                         ),
@@ -134,158 +139,158 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     );
   }
 
-  /// Called when ARCoreView is created and ready
-  /// This is where we initialize the AR scene and add 3D objects
   void _onArCoreViewCreated(ArCoreController controller) {
     arCoreController = controller;
-
-    // Add the 3D ball to the AR scene
+    _addBasketballHoop();
     _addBallToScene();
   }
 
-  /// Creates and adds a 3D sphere (ball) to the AR scene
+  void _addBasketballHoop() {
+    // 1. Backboard (White Board)
+    final backboardMaterial = ArCoreMaterial(
+      color: Colors.white,
+      metallic: 0.0,
+      roughness: 0.1,
+    );
+    final backboardShape = ArCoreCube(
+      materials: [backboardMaterial],
+      size: vector.Vector3(1.2, 0.9, 0.05), // Width, Height, Depth
+    );
+    backboardNode = ArCoreNode(
+      shape: backboardShape,
+      position: vector.Vector3(
+          hoopPosition.x, hoopPosition.y + 0.45, hoopPosition.z - 0.1),
+    );
+
+    // 2. Hoop/Rim (represented as an Orange Box for simplicity)
+    // In a real app, use a proper 3D model
+    final hoopMaterial = ArCoreMaterial(
+      color: Colors.deepOrange,
+      metallic: 1.0,
+    );
+    final hoopShape = ArCoreCube(
+      materials: [hoopMaterial],
+      size: vector.Vector3(0.45, 0.05, 0.45), // A flat square rim
+    );
+    hoopNode = ArCoreNode(
+      shape: hoopShape,
+      position: hoopPosition,
+    );
+
+    arCoreController?.addArCoreNode(backboardNode!);
+    arCoreController?.addArCoreNode(hoopNode!);
+  }
+
   void _addBallToScene() {
-    // Define the ball's material (color and texture properties)
     final material = ArCoreMaterial(
-      color: Colors.red,
-      metallic: 0.8, // Makes it look slightly metallic
-      roughness: 0.4, // Controls how smooth/rough the surface appears
+      color: Colors.orange,
+      metallic: 0.1,
+      roughness: 0.5,
+      reflectance: 0.5,
     );
+    final sphere = ArCoreSphere(radius: 0.12, materials: [material]);
 
-    // Create a sphere shape with 0.1 meter radius (10 cm diameter)
-    final sphere = ArCoreSphere(radius: 0.1, materials: [material]);
-
-    // Create an AR node - this is a container that holds the 3D object
-    // and defines its position, rotation, and scale in the AR world
     ballNode = ArCoreNode(
+      name: 'basketball',
       shape: sphere,
-      position: initialPosition, // Place 1 meter in front of camera
-      rotation: vector.Vector4(0, 0, 0, 0), // No rotation
+      position: currentBallPosition,
     );
 
-    // Add the node to the AR scene
     arCoreController?.addArCoreNode(ballNode!);
   }
 
-  /// Simulates throwing the ball forward (toward the wall)
-  /// This is a fake throw - just moving the position, no real physics
   void _throwBall() {
     if (ballNode == null || isThrowing) return;
+    setState(() => isThrowing = true);
 
-    setState(() {
-      isThrowing = true;
-    });
+    // Initial position
+    final start = currentBallPosition.clone();
 
-    // Calculate the target position (3 meters forward from current position)
-    final targetPosition = vector.Vector3(
-      currentPosition.x,
-      currentPosition.y,
-      currentPosition.z - 3.0, // Move 3 meters away (negative Z is forward)
-    );
+    // Target position (The hoop)
+    // We add some "skill" variance based on nothing for now, but in future could use sensors
+    // Perfect shot logic:
+    final end = hoopPosition.clone();
 
-    // Animate the ball movement over time
-    // This creates a simple linear movement from current to target position
-    _animateBallMovement(targetPosition);
-  }
-
-  /// Animates the ball from current position to target position
-  void _animateBallMovement(vector.Vector3 targetPosition) {
-    const steps = 20; // Number of position updates
-    const stepDuration =
-        40; // Duration per step in milliseconds (800ms total / 20 steps)
-
-    // Calculate how much to move in each step
-    final deltaX = (targetPosition.x - currentPosition.x) / steps;
-    final deltaY = (targetPosition.y - currentPosition.y) / steps;
-    final deltaZ = (targetPosition.z - currentPosition.z) / steps;
-
+    // Animation loop (simulating projectile motion)
+    int steps = 25;
+    double durationSecs = 1.0;
+    double timePerStep = durationSecs / steps;
     int currentStep = 0;
 
-    // Update position gradually over time
     Future.doWhile(() async {
-      await Future.delayed(const Duration(milliseconds: stepDuration));
+      await Future.delayed(
+          Duration(milliseconds: (timePerStep * 1000).round()));
 
-      if (currentStep < steps && ballNode != null) {
-        // Update current position
-        currentPosition = vector.Vector3(
-          currentPosition.x + deltaX,
-          currentPosition.y + deltaY,
-          currentPosition.z + deltaZ,
-        );
-
-        // Remove old ball node
-        arCoreController?.removeNode(nodeName: ballNode!.name);
-
-        // Create updated ball at new position
-        final material = ArCoreMaterial(
-          color: Colors.red,
-          metallic: 0.8,
-          roughness: 0.4,
-        );
-
-        final sphere = ArCoreSphere(radius: 0.1, materials: [material]);
-
-        ballNode = ArCoreNode(
-          shape: sphere,
-          position: currentPosition,
-          rotation: vector.Vector4(0, 0, 0, 0),
-        );
-
-        // Add updated ball to scene
-        arCoreController?.addArCoreNode(ballNode!);
-
-        currentStep++;
-        return true; // Continue loop
-      } else {
-        // Animation complete
-        setState(() {
-          isThrowing = false;
-        });
-        return false; // Exit loop
+      if (currentStep > steps || ballNode == null) {
+        // Check scoring at the end
+        _checkScore(currentBallPosition);
+        setState(() => isThrowing = false);
+        return false;
       }
+
+      double t = currentStep / steps; // 0.0 to 1.0
+
+      // Linear interpolation for X and Z (straight text)
+      double x = start.x + (end.x - start.x) * t;
+      double z = start.z + (end.z - start.z) * t;
+
+      // Parabolic arc for Y: y = startY + (distY * t) + (4 * height * t * (1-t))
+      // This adds an "arc" height of 0.8 meters
+      double arcHeight = 0.8;
+      double y =
+          start.y + (end.y - start.y) * t + (4 * arcHeight * t * (1 - t));
+
+      vector.Vector3 newPos = vector.Vector3(x, y, z);
+
+      _updateBallPosition(newPos);
+      currentBallPosition = newPos;
+
+      currentStep++;
+      return true;
     });
   }
 
-  /// Resets the ball to its initial position (1 meter in front)
-  void _resetBall() {
-    if (ballNode == null) return;
-
-    // Remove current ball from scene
+  void _updateBallPosition(vector.Vector3 position) {
     arCoreController?.removeNode(nodeName: ballNode!.name);
 
-    // Reset position to initial
-    currentPosition = vector.Vector3(
-      initialPosition.x,
-      initialPosition.y,
-      initialPosition.z,
-    );
-
-    // Create ball at initial position
-    final material = ArCoreMaterial(
-      color: Colors.red,
-      metallic: 0.8,
-      roughness: 0.4,
-    );
-
-    final sphere = ArCoreSphere(radius: 0.1, materials: [material]);
+    final material = ArCoreMaterial(color: Colors.orange);
+    final sphere = ArCoreSphere(radius: 0.12, materials: [material]);
 
     ballNode = ArCoreNode(
+      name: 'basketball',
       shape: sphere,
-      position: currentPosition,
-      rotation: vector.Vector4(0, 0, 0, 0),
+      position: position,
     );
-
-    // Add ball back to scene at initial position
     arCoreController?.addArCoreNode(ballNode!);
+  }
 
-    setState(() {
-      isThrowing = false;
-    });
+  void _checkScore(vector.Vector3 finalPos) {
+    // Simple distance check: if ball is close enough to hoop position
+    double distance = finalPos.distanceTo(hoopPosition);
+    if (distance < 0.3) {
+      // 30cm tolerance
+      setState(() {
+        score++;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Basket! +1 Point')),
+      );
+    }
+  }
+
+  void _resetBall() {
+    if (ballNode != null) {
+      arCoreController?.removeNode(nodeName: ballNode!.name);
+    }
+
+    currentBallPosition = vector.Vector3.copy(initialBallPosition);
+    _addBallToScene();
+
+    setState(() => isThrowing = false);
   }
 
   @override
   void dispose() {
-    // Clean up AR session when screen is disposed
     arCoreController?.dispose();
     super.dispose();
   }
