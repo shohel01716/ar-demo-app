@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:arcore_flutter_plugin/arcore_flutter_plugin.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'package:permission_handler/permission_handler.dart';
+import 'dart:math' as math;
 
 void main() {
   runApp(const MyApp());
@@ -40,6 +41,9 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   // Game/Physics constants
   final vector.Vector3 initialBallPosition = vector.Vector3(0.0, -0.5, -1.0);
   final vector.Vector3 hoopPosition = vector.Vector3(0.0, 0.5, -3.0);
+  final List<vector.Vector3> rimSegments =
+      []; // Store rim segment positions for physics
+  final double rimRadius = 0.25;
 
   // Current position of the ball
   late vector.Vector3 currentBallPosition;
@@ -182,22 +186,71 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
           hoopPosition.x, hoopPosition.y + 0.45, hoopPosition.z - 0.1),
     );
 
-    // 2. Hoop/Rim (represented as an Orange Box for simplicity)
-    final hoopMaterial = ArCoreMaterial(
+    // 2. Rim (Ring of nodes to simulate an open hoop)
+    final rimMaterial = ArCoreMaterial(
       color: Colors.deepOrange,
       metallic: 1.0,
-    );
-    final hoopShape = ArCoreCube(
-      materials: [hoopMaterial],
-      size: vector.Vector3(0.45, 0.05, 0.45),
-    );
-    hoopNode = ArCoreNode(
-      shape: hoopShape,
-      position: hoopPosition,
+      reflectance: 0.8,
     );
 
+    rimSegments.clear();
+    int segments = 16;
+    double angleStep = (2 * 3.14159) / segments;
+
+    for (int i = 0; i < segments; i++) {
+      double angle = i * angleStep;
+      double x = rimRadius * math.cos(angle);
+      double z = rimRadius * math.sin(angle);
+
+      final segmentShape = ArCoreSphere(
+        materials: [rimMaterial],
+        radius: 0.02, // Thickness of the rim
+      );
+
+      // Adjust position relative to hoop center
+      // Note: Hoop is flat on X-Z plane (since Y is Up)
+      final pos = vector.Vector3(
+          hoopPosition.x + x, hoopPosition.y, hoopPosition.z + z);
+
+      rimSegments.add(pos);
+
+      final segmentNode = ArCoreNode(
+        shape: segmentShape,
+        position: pos,
+      );
+      arCoreController?.addArCoreNode(segmentNode);
+    }
+
+    // 3. Visual Net (Cylinder)
+    final netMaterial = ArCoreMaterial(
+      color: Colors.white.withOpacity(0.5),
+      textureBytes: null, // Could add a grid texture here if available
+      metallic: 0.0,
+      roughness: 1.0,
+    );
+
+    final netShape = ArCoreCylinder(
+      materials: [netMaterial],
+      radius: rimRadius * 0.9,
+      height: 0.4,
+    );
+
+    final netNode = ArCoreNode(
+      shape: netShape,
+      position: vector.Vector3(
+          hoopPosition.x,
+          hoopPosition.y - 0.2, // Hangs below the rim
+          hoopPosition.z),
+    );
+    arCoreController?.addArCoreNode(netNode);
+
+    // Add backboard with corrected position
+    backboardNode = ArCoreNode(
+      shape: backboardShape,
+      position: vector.Vector3(hoopPosition.x, hoopPosition.y + 0.45,
+          hoopPosition.z - 0.4), // Moved further back
+    );
     arCoreController?.addArCoreNode(backboardNode!);
-    arCoreController?.addArCoreNode(hoopNode!);
   }
 
   void _addBallToScene() {
@@ -256,35 +309,65 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
 
       // 3. Collision Detection (Backboard)
       if (backboardNode != null) {
-        // Simple AABB check for backboard plane
-        // Backboard roughly at Z = -3.25 (adjusted for visual thickness)
-        // Check Z plane crossing
-        if (currentBallPosition.z < -3.0 &&
-            currentBallPosition.z > -3.3 &&
+        // Backboard Plane Z roughly at hoopPosition.z - 0.4
+        // Face is at -0.4 + thickness/2 = -0.375 usually?
+        // Let's assume backboard surface is at (hoopPosition.z - 0.35)
+        double backboardZ = hoopPosition.z - 0.35;
+
+        if (currentBallPosition.z < backboardZ &&
+            currentBallPosition.z > backboardZ - 0.3 && // Not too far behind
             currentBallPosition.y > hoopPosition.y &&
             currentBallPosition.y < hoopPosition.y + 1.0 &&
             currentBallPosition.x > -0.6 &&
             currentBallPosition.x < 0.6) {
-          // Bounce!
-          velocity.z = -velocity.z * 0.5; // Invert Z with damping
-          velocity.y *= 0.8; // Lose energy
-          currentBallPosition.z = -2.95; // Push out to prevent stuck
+          // Bounce off backboard
+          velocity.z = -velocity.z * 0.6; // Damped bounce
+          currentBallPosition.z = backboardZ + 0.05; // Push out
         }
       }
 
-      // 4. Floor/Out of Bounds Collision
+      // 4. Collision Detection (Rim)
+      for (final segmentPos in rimSegments) {
+        double dist = currentBallPosition.distanceTo(segmentPos);
+        // Ball radius 0.12 + Rim thickness 0.02 = 0.14
+        if (dist < 0.14) {
+          // Simple elastic collision response
+          // Vector from rim to ball
+          vector.Vector3 normal = currentBallPosition - segmentPos;
+          normal.normalize();
+
+          // Reflect velocity
+          // v_new = v - 2(v . n)n
+          double dot = velocity.dot(normal);
+          if (dot < 0) {
+            // Only bounce if moving towards the rim
+            velocity = velocity - normal * (2 * dot) * 0.7; // 0.7 restitution
+            // Push out to prevent sticking
+            currentBallPosition = segmentPos + normal * 0.15;
+            // hitRim = true;
+            break; // Handle one collision per frame for simplicity
+          }
+        }
+      }
+
+      // 5. Floor/Out of Bounds Collision
       if (currentBallPosition.y < -2.0 || currentBallPosition.z < -10.0) {
         setState(() => isThrowing = false);
         return false;
       }
 
-      // 5. Hoop Scoring
-      double distToHoop = currentBallPosition.distanceTo(hoopPosition);
-      if (distToHoop < 0.25) {
-        // 25cm tolerance
-        _checkScore();
-        setState(() => isThrowing = false);
-        return false;
+      // 6. Hoop Scoring
+      // Check if ball passes THROUGH the hoop plane closer to center
+      // Plane is Y = hoopPosition.y
+      if (currentBallPosition.distanceTo(hoopPosition) < 0.20 &&
+          (currentBallPosition.y - hoopPosition.y).abs() < 0.1) {
+        // ensure it's moving downwards
+        if (velocity.y < 0) {
+          _checkScore();
+          // After score, maybe let it fall through?
+          // Just reset for now or let it continue
+          // We let it continue to fall through the "net"
+        }
       }
 
       // Update Visuals
