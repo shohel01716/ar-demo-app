@@ -281,7 +281,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     double sensitivity = 0.002;
     double forwardForce = -velocity.pixelsPerSecond.dy *
         sensitivity; // Swipe Up is negative Y pixels
-    double upForce = forwardForce * 0.8; // Add some arc
+    double upForce = forwardForce * 1.2; // Increase arc for better scoring
     double sideForce = velocity.pixelsPerSecond.dx * sensitivity * 0.5;
 
     // Minimum throw strength
@@ -320,8 +320,9 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
             currentBallPosition.y < hoopPosition.y + 1.0 &&
             currentBallPosition.x > -0.6 &&
             currentBallPosition.x < 0.6) {
-          // Bounce off backboard
-          velocity.z = -velocity.z * 0.6; // Damped bounce
+          // Bounce off backboard with less energy ("dead" backboard)
+          velocity.z = -velocity.z * 0.3; // Much less bounce back
+          velocity.y = velocity.y * 0.5; // Lose vertical energy too
           currentBallPosition.z = backboardZ + 0.05; // Push out
         }
       }
@@ -340,8 +341,9 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
           // v_new = v - 2(v . n)n
           double dot = velocity.dot(normal);
           if (dot < 0) {
-            // Only bounce if moving towards the rim
-            velocity = velocity - normal * (2 * dot) * 0.7; // 0.7 restitution
+            // Softer rim bounce
+            velocity = velocity -
+                normal * (2 * dot) * 0.5; // 0.5 restitution (softer rim)
             // Push out to prevent sticking
             currentBallPosition = segmentPos + normal * 0.15;
             // hitRim = true;
