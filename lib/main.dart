@@ -53,6 +53,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   // Game State
   bool isThrowing = false;
   bool isGameStarted = false;
+  bool isBallInHand = true; // Show 2D ball when true
   bool isArSessionInitialized =
       false; // Track if AR session has been created once
   bool _cameraPermissionGranted = false;
@@ -109,6 +110,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                 // Layer 1: AR View (Persistent after first start)
                 if (isArSessionInitialized)
                   ArCoreView(
+                    key: const ValueKey('ar_core_view'),
                     onArCoreViewCreated: _onArCoreViewCreated,
                     enableTapRecognizer: true,
                   ),
@@ -116,8 +118,8 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                 // Layer 2: Game UI or Start/Menu Screen
                 if (!isGameStarted)
                   Container(
-                    color:
-                        Colors.white, // Opaque background to hide camera/game
+                    color: Colors.white.withAlpha(
+                        254), // Nearly opaque to prevent surface destruction
                     width: double.infinity,
                     height: double.infinity,
                     child: Center(
@@ -188,7 +190,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                       GestureDetector(
                         onPanEnd: (details) {
                           if (!isThrowing &&
-                              ballNode != null &&
+                              isBallInHand && // Only allow swipe if ball is in hand
                               throwsLeft > 0) {
                             _handleSwipe(details.velocity);
                           }
@@ -246,6 +248,41 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                           ),
                         ),
                       ),
+                      // 2D Ball Overlay (HUD)
+                      if (isBallInHand && !isThrowing && throwsLeft > 0)
+                        Positioned(
+                          bottom: 100,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: Container(
+                              width: 100,
+                              height: 100,
+                              decoration: BoxDecoration(
+                                color: Colors.orange,
+                                shape: BoxShape.circle,
+                                border:
+                                    Border.all(color: Colors.black, width: 2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.5),
+                                    blurRadius: 10,
+                                    spreadRadius: 2,
+                                  )
+                                ],
+                                gradient: const RadialGradient(
+                                  colors: [
+                                    Colors.orangeAccent,
+                                    Colors.deepOrange
+                                  ],
+                                  center: Alignment(-0.3, -0.3),
+                                ),
+                              ),
+                              child: const Icon(Icons.sports_basketball,
+                                  size: 60, color: Colors.black12),
+                            ),
+                          ),
+                        ),
                       const Positioned(
                         bottom: 150,
                         left: 0,
@@ -272,8 +309,14 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
 
   void _onArCoreViewCreated(ArCoreController controller) {
     arCoreController = controller;
-    _addBasketballHoop();
-    _addBallToScene();
+    // Small delay to allow surface to stabilize
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) {
+        _addBasketballHoop();
+      }
+    });
+    // Do NOT add ball here initially; we use 2D overlay until throw
+    // _addBallToScene();
   }
 
   void _addBasketballHoop() {
@@ -360,7 +403,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     arCoreController?.addArCoreNode(backboardNode!);
   }
 
-  void _addBallToScene() {
+  void _spawnBallForThrow() {
     final material = ArCoreMaterial(
       color: Colors.orange,
       metallic: 0.1,
@@ -372,35 +415,44 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     ballNode = ArCoreNode(
       name: 'basketball',
       shape: sphere,
-      position: currentBallPosition,
+      position: currentBallPosition, // Use current reset position
     );
 
     arCoreController?.addArCoreNode(ballNode!);
   }
 
   void _handleSwipe(Velocity velocity) {
-    if (throwsLeft <= 0) return;
+    if (throwsLeft <= 0 || !isBallInHand) return;
+
+    double sensitivity = 0.002;
+    double pixelsX = velocity.pixelsPerSecond.dx;
+    double pixelsY = -velocity.pixelsPerSecond.dy; // Positive is up
+
+    double forwardForce = pixelsY * sensitivity;
+    double sideForce = pixelsX * sensitivity * 0.3; // Reduced sensitivity
+
+    // Deadzone: If swipe is mostly vertical, ignore side force to keep it straight
+    if (sideForce.abs() < (forwardForce * 0.2)) {
+      sideForce = 0;
+    }
+
+    // Minimum throw strength
+    if (forwardForce < 2.0) forwardForce = 2.0;
+    double upForce = forwardForce * 1.25;
 
     setState(() {
       isThrowing = true;
+      isBallInHand = false;
       throwsLeft--;
     });
 
-    // Map 2D Swipe Velocity to 3D Force
-    // Y (Screen Up) -> Z (World Forward) & Y (World Up)
-    // X (Screen Right) -> X (World Right)
+    // Reset current position exactly to start
+    currentBallPosition = vector.Vector3.copy(initialBallPosition);
 
-    double sensitivity = 0.002;
-    double forwardForce = -velocity.pixelsPerSecond.dy *
-        sensitivity; // Swipe Up is negative Y pixels
-    double upForce = forwardForce * 1.2; // Increase arc for better scoring
-    double sideForce = velocity.pixelsPerSecond.dx * sensitivity * 0.5;
+    // Spawn 3D ball
+    _spawnBallForThrow();
 
-    // Minimum throw strength
-    if (forwardForce < 1.0) forwardForce = 1.0;
-
-    // Initial Velocity Vector
-    // Note: Z is negative into the screen
+    // Initial Velocity Vector (Z is negative forward)
     vector.Vector3 ballVelocity =
         vector.Vector3(sideForce, upForce, -forwardForce);
 
@@ -526,13 +578,16 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
       isGameStarted = true;
       score = 0;
       throwsLeft = 5;
+      isBallInHand = true; // Start with ball in hand
     });
 
-    // If restarting (controller exists), make sure ball is reset
+    // If restarting (controller exists), make sure ball is reset (removed)
     if (arCoreController != null) {
-      // Ensure hoop is there (it should be persistent, but we could check)
-      // Reset ball
-      _resetBall();
+      if (ballNode != null) {
+        arCoreController?.removeNode(nodeName: ballNode!.name);
+      }
+      currentBallPosition = vector.Vector3.copy(initialBallPosition);
+      // Do NOT add 3D ball yet
     }
   }
 
@@ -540,6 +595,7 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     setState(() {
       isGameStarted = false;
       isThrowing = false;
+      isBallInHand = true;
     });
     // Remove the ball when stopping, for a clean restart
     if (ballNode != null) {
@@ -592,9 +648,12 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
     }
 
     currentBallPosition = vector.Vector3.copy(initialBallPosition);
-    _addBallToScene();
+    // _addBallToScene(); // Don't add 3D ball
 
-    setState(() => isThrowing = false);
+    setState(() {
+      isThrowing = false;
+      isBallInHand = true; // Show 2D ball again
+    });
   }
 
   @override
