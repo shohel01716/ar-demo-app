@@ -53,6 +53,8 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
   // Game State
   bool isThrowing = false;
   bool isGameStarted = false;
+  bool isArSessionInitialized =
+      false; // Track if AR session has been created once
   bool _cameraPermissionGranted = false;
   int score = 0;
   int throwsLeft = 5;
@@ -102,145 +104,169 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
                 ],
               ),
             )
-          : !isGameStarted
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'Select Mode:',
-                        style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
+          : Stack(
+              children: [
+                // Layer 1: AR View (Persistent after first start)
+                if (isArSessionInitialized)
+                  ArCoreView(
+                    onArCoreViewCreated: _onArCoreViewCreated,
+                    enableTapRecognizer: true,
+                  ),
+
+                // Layer 2: Game UI or Start/Menu Screen
+                if (!isGameStarted)
+                  Container(
+                    color:
+                        Colors.white, // Opaque background to hide camera/game
+                    width: double.infinity,
+                    height: double.infinity,
+                    child: Center(
+                      child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          ChoiceChip(
-                            label: const Text('Basic',
-                                style: TextStyle(fontSize: 18)),
-                            selected: selectedMode == GameMode.basic,
-                            onSelected: (bool selected) {
-                              setState(() {
-                                selectedMode = GameMode.basic;
-                              });
-                            },
+                          const Text(
+                            'AR Basketball',
+                            style: TextStyle(
+                                fontSize: 32, fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(width: 20),
-                          ChoiceChip(
-                            label: const Text('Pro',
-                                style: TextStyle(fontSize: 18)),
-                            selected: selectedMode == GameMode.pro,
-                            onSelected: (bool selected) {
-                              setState(() {
-                                selectedMode = GameMode.pro;
-                              });
-                            },
+                          const SizedBox(height: 40),
+                          const Text(
+                            'Select Mode:',
+                            style: TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              ChoiceChip(
+                                label: const Text('Basic',
+                                    style: TextStyle(fontSize: 18)),
+                                selected: selectedMode == GameMode.basic,
+                                onSelected: (bool selected) {
+                                  setState(() {
+                                    selectedMode = GameMode.basic;
+                                  });
+                                },
+                              ),
+                              const SizedBox(width: 20),
+                              ChoiceChip(
+                                label: const Text('Pro',
+                                    style: TextStyle(fontSize: 18)),
+                                selected: selectedMode == GameMode.pro,
+                                onSelected: (bool selected) {
+                                  setState(() {
+                                    selectedMode = GameMode.pro;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 40),
+                          ElevatedButton(
+                            onPressed: _startGame,
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 50, vertical: 20),
+                              backgroundColor: Colors.deepOrange,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text(
+                              'START GAME',
+                              style: TextStyle(
+                                  fontSize: 24, fontWeight: FontWeight.bold),
+                            ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 40),
-                      ElevatedButton(
-                        onPressed: _startGame,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 50, vertical: 20),
-                          backgroundColor: Colors.deepOrange,
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text(
-                          'START GAME',
-                          style: TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : Stack(
-                  children: [
-                    ArCoreView(
-                      onArCoreViewCreated: _onArCoreViewCreated,
-                      enableTapRecognizer: true,
                     ),
-                    GestureDetector(
-                      onPanEnd: (details) {
-                        if (!isThrowing && ballNode != null && throwsLeft > 0) {
-                          _handleSwipe(details.velocity);
-                        }
-                      },
-                      child: Container(
-                        color: Colors.transparent,
-                        width: double.infinity,
-                        height: double.infinity,
-                      ),
-                    ),
-                    // Score & Throws Display
-                    Positioned(
-                      top: 20,
-                      right: 20,
-                      child: SafeArea(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              'Score: $score',
-                              style: const TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  shadows: [
-                                    Shadow(blurRadius: 5, color: Colors.black)
-                                  ]),
-                            ),
-                            Text(
-                              'Throws: $throwsLeft',
-                              style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  shadows: [
-                                    Shadow(blurRadius: 5, color: Colors.black)
-                                  ]),
-                            ),
-                          ],
+                  )
+                else
+                  // Game Overlay (Score, Throws, Controls)
+                  Stack(
+                    children: [
+                      GestureDetector(
+                        onPanEnd: (details) {
+                          if (!isThrowing &&
+                              ballNode != null &&
+                              throwsLeft > 0) {
+                            _handleSwipe(details.velocity);
+                          }
+                        },
+                        child: Container(
+                          color: Colors.transparent,
+                          width: double.infinity,
+                          height: double.infinity,
                         ),
                       ),
-                    ),
-                    // Stop Game Button
-                    Positioned(
-                      top: 20,
-                      left: 20,
-                      child: SafeArea(
-                        child: ElevatedButton(
-                          onPressed: _stopGame,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            foregroundColor: Colors.white,
-                          ),
-                          child: const Text('Stop Game'),
-                        ),
-                      ),
-                    ),
-                    const Positioned(
-                      bottom: 150,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Text(
-                          "Swipe Up to Throw!",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            shadows: [
-                              Shadow(blurRadius: 10, color: Colors.black)
+                      // Score & Throws Display
+                      Positioned(
+                        top: 20,
+                        right: 20,
+                        child: SafeArea(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                'Score: $score',
+                                style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    shadows: [
+                                      Shadow(blurRadius: 5, color: Colors.black)
+                                    ]),
+                              ),
+                              Text(
+                                'Throws: $throwsLeft',
+                                style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    shadows: [
+                                      Shadow(blurRadius: 5, color: Colors.black)
+                                    ]),
+                              ),
                             ],
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                      // Stop Game Button
+                      Positioned(
+                        top: 20,
+                        left: 20,
+                        child: SafeArea(
+                          child: ElevatedButton(
+                            onPressed: _stopGame,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('Stop Game'),
+                          ),
+                        ),
+                      ),
+                      const Positioned(
+                        bottom: 150,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Text(
+                            "Swipe Up to Throw!",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              shadows: [
+                                Shadow(blurRadius: 10, color: Colors.black)
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
     );
   }
 
@@ -496,10 +522,18 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
 
   void _startGame() {
     setState(() {
+      isArSessionInitialized = true; // Ensure AR view is in tree
       isGameStarted = true;
       score = 0;
       throwsLeft = 5;
     });
+
+    // If restarting (controller exists), make sure ball is reset
+    if (arCoreController != null) {
+      // Ensure hoop is there (it should be persistent, but we could check)
+      // Reset ball
+      _resetBall();
+    }
   }
 
   void _stopGame() {
@@ -507,8 +541,10 @@ class _ARDemoScreenState extends State<ARDemoScreen> {
       isGameStarted = false;
       isThrowing = false;
     });
-    // Clean up nodes manually if needed, or let ArCoreView dispose
-    // We can rely on widget rebuild to recreate ArCoreView
+    // Remove the ball when stopping, for a clean restart
+    if (ballNode != null) {
+      arCoreController?.removeNode(nodeName: ballNode!.name);
+    }
   }
 
   void _scheduleAutoReset() {
